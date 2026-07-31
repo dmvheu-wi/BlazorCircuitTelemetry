@@ -1,0 +1,981 @@
+You are implementing a new educational proof-of-concept in this GitHub repository:
+
+https://github.com/Impesoft/POC_InnerWorkings
+
+Your task is to create a .NET 10 Blazor Web App page that demonstrates and visualizes the internal behavior of an Interactive Server Blazor circuit.
+
+Do not merely describe the solution. Inspect the repository, implement the feature completely, build it, resolve compilation errors, and report exactly what you changed.
+
+# Primary goal
+
+Create a page composed using static server-side rendering (static SSR) with two separate sibling interactive islands:
+
+1. An Interactive Server component that contains controls and behaviors whose Blazor circuit activity is observable.
+2. An Interactive WebAssembly telemetry terminal that observes, correlates, filters, and displays that activity without generating additional traffic on the Interactive Server circuit being observed.
+
+Conceptually:
+
+Static SSR page
+├── Interactive Server playground — the observed subject
+└── Interactive WebAssembly terminal — the observer
+
+The feature is educational. It should make the relationship among browser events, SignalR transport traffic, Blazor circuits, server execution, render batches, JavaScript interop, and application-level actions understandable.
+
+# Required preparation
+
+Before modifying code:
+
+1. Inspect the entire repository structure.
+2. Identify:
+   - Current target frameworks.
+   - Existing Blazor hosting model.
+   - Existing server and client projects.
+   - Current render-mode configuration.
+   - Existing pages/components related to Blazor internals.
+   - Existing CSS and UI conventions.
+   - Any obsolete implementation that overlaps this feature.
+3. Do not blindly preserve outdated code.
+4. Reuse useful conventions, but replace obsolete architecture where appropriate.
+5. Keep unrelated POCs and pages working.
+6. Do not rename unrelated projects or introduce assumptions from other projects.
+7. Use .NET 10 APIs and conventions.
+8. Prefer framework functionality and small, explicit code over third-party dependencies.
+
+If the repository is not already a Blazor Web App configured for both Interactive Server and Interactive WebAssembly render modes, update it carefully so both are supported.
+
+# Important Blazor render-mode constraints
+
+The page itself must remain statically server-rendered.
+
+The two interactive components must be sibling islands under the static parent:
+
+```razor
+<BlazorServerPlayground @rendermode="InteractiveServer" />
+<BlazorTelemetryTerminal @rendermode="InteractiveWebAssembly" />
+```
+
+Do not nest the WebAssembly terminal inside the Interactive Server component.
+
+Do not make the routed page itself Interactive Server, Interactive WebAssembly, or Interactive Auto.
+
+Do not pass RenderFragment or ChildContent parameters across the static-to-interactive boundary. Parameters crossing that boundary must be JSON serializable.
+
+The Interactive WebAssembly terminal belongs in the client project or another assembly that is available to the WebAssembly client build.
+
+Configure the application using the appropriate .NET 10 APIs, including the equivalent of:
+
+```csharp
+builder.Services
+    .AddRazorComponents()
+    .AddInteractiveServerComponents()
+    .AddInteractiveWebAssemblyComponents();
+
+app.MapRazorComponents<App>()
+    .AddInteractiveServerRenderMode()
+    .AddInteractiveWebAssemblyRenderMode()
+    .AddAdditionalAssemblies(typeof(ClientAssemblyMarker).Assembly);
+```
+
+Adapt this to the repository’s actual structure rather than pasting it blindly.
+
+# Core architecture
+
+Implement these distinct data paths:
+
+## Browser transport observations
+
+A JavaScript bootstrap observer must install before Blazor starts and observe the browser-side transport used for `/_blazor`.
+
+It must:
+
+- Wrap or instrument the browser WebSocket constructor before Blazor initializes.
+- Only capture WebSocket connections whose URL targets the Blazor endpoint, normally `/_blazor`.
+- Preserve native WebSocket behavior.
+- Capture:
+  - WebSocket construction.
+  - Open.
+  - Incoming messages.
+  - Outgoing messages.
+  - Error.
+  - Close.
+  - Close code.
+  - Close reason.
+  - Whether closure was clean.
+  - URL.
+  - Timestamp.
+  - Sequence number.
+  - Payload type.
+  - Payload byte length.
+  - A bounded hexadecimal preview for binary data.
+  - A bounded textual preview for string data.
+- Avoid consuming or altering Blob, ArrayBuffer, typed-array, or string payloads.
+- Avoid logging secrets to the browser console by default.
+- Keep a bounded browser-side ring buffer so startup events are retained before the WebAssembly terminal becomes interactive.
+- Publish live entries to subscribers after the terminal starts.
+- Be safely idempotent if installation is attempted more than once.
+
+Use `autostart="false"` for `blazor.web.js` if required to guarantee observer installation before `Blazor.start()`.
+
+Do not accidentally load Blazor twice.
+
+## Server telemetry observations
+
+Create a server-side telemetry service that receives and broadcasts structured events.
+
+Use a bounded, non-blocking design. A slow telemetry consumer must never block or damage the observed Blazor circuit.
+
+Suitable implementation options include:
+
+- A singleton event publisher.
+- Per-subscriber bounded channels.
+- A fan-out broadcaster.
+- Explicit removal of disconnected subscribers.
+
+Do not use one shared ChannelReader that load-balances events among subscribers. Every connected telemetry terminal should see its own copy of events.
+
+Expose server telemetry through a dedicated Server-Sent Events endpoint, for example:
+
+```text
+/_telemetry/events
+```
+
+Use SSE rather than a custom SignalR hub so the monitoring transport is clearly separate from `/_blazor`.
+
+The endpoint must:
+
+- Set `Content-Type: text/event-stream`.
+- Disable caching.
+- Stream serialized telemetry entries.
+- Flush after events.
+- Observe request cancellation.
+- Remove disconnected subscribers.
+- Send an occasional comment/heartbeat if necessary to keep proxies from closing idle streams.
+- Avoid exposing telemetry in production accidentally.
+
+Enable it only in Development or behind an explicit configuration option such as:
+
+```json
+{
+  "BlazorTelemetry": {
+    "Enabled": true
+  }
+}
+```
+
+Prefer both:
+- Development environment.
+- Explicit enabled setting.
+
+Document the behavior clearly.
+
+## Circuit lifecycle observations
+
+Implement a `CircuitHandler` that emits structured events for:
+
+- Circuit opened.
+- Connection up.
+- Connection down.
+- Circuit closed.
+
+Include:
+
+- Circuit ID where available.
+- Timestamp.
+- Event category.
+- Event name.
+- Human-readable summary.
+- Structured metadata.
+
+Do not treat “connection down” as “circuit disposed.” The UI should make this distinction visible.
+
+Register the CircuitHandler with the correct scoped lifetime.
+
+## Application annotations
+
+Create a small application telemetry/annotation abstraction usable by the Interactive Server demo component.
+
+It should support:
+
+- Instant annotations.
+- Timed operations/scopes.
+- Operation started.
+- Operation completed.
+- Operation failed.
+- Duration.
+- Structured metadata.
+- Correlation ID or operation ID.
+
+Example conceptual usage:
+
+```csharp
+using var operation = telemetry.Begin(
+    "Counter button handler",
+    new { PreviousValue = _count });
+
+_count++;
+
+telemetry.Annotate(
+    "Counter value changed",
+    new { NewValue = _count });
+```
+
+Do not require OpenTelemetry packages unless the repository already uses them. A small dedicated abstraction is sufficient.
+
+## Framework/server diagnostics
+
+Add the safest practical diagnostics that can be implemented without depending on unstable reflection hacks.
+
+Capture or annotate, where practical:
+
+- UI event handler entered.
+- UI event handler completed.
+- UI event handler failed.
+- Server-originated component update.
+- JavaScript interop call started/completed/failed.
+- Long-running handler.
+- Deliberate exception.
+- Navigation action.
+- Circuit lifecycle events.
+- SSE connection lifecycle.
+
+For render batches:
+
+- Do not claim to provide a fully decoded render-tree diff unless it is genuinely implemented.
+- It is acceptable in the first version to display observed incoming frame sizes correlated with annotated component actions.
+- Clearly classify derived events as inferred.
+- Avoid undocumented reflection into private Blazor types unless isolated, clearly labeled as version-specific, and optional.
+- Do not implement a fragile BlazorPack decoder as part of the minimum required feature.
+
+# Shared telemetry contract
+
+Create a shared, JSON-serializable telemetry contract available to both server and client code.
+
+A suitable model should contain fields similar to:
+
+```csharp
+public sealed record TelemetryEntry
+{
+    public required long Sequence { get; init; }
+    public required DateTimeOffset Timestamp { get; init; }
+    public required TelemetryCategory Category { get; init; }
+    public required string Name { get; init; }
+    public required string Summary { get; init; }
+
+    public TelemetryDirection? Direction { get; init; }
+    public string? Source { get; init; }
+    public string? CircuitId { get; init; }
+    public string? CorrelationId { get; init; }
+    public int? ByteLength { get; init; }
+    public string? PayloadType { get; init; }
+    public string? Preview { get; init; }
+    public TelemetryConfidence Confidence { get; init; }
+    public IReadOnlyDictionary<string, object?>? Metadata { get; init; }
+}
+```
+
+You may adjust the exact design for reliable System.Text.Json serialization.
+
+Avoid polymorphic object graphs that make serialization fragile.
+
+Consider representing metadata as:
+
+```csharp
+IReadOnlyDictionary<string, JsonElement>
+```
+
+or another safely serializable format.
+
+Categories must include at least:
+
+- RawFrame
+- SignalR
+- Circuit
+- Server
+- Annotation
+
+Confidence/source classification should distinguish at least:
+
+- Observed
+- Framework
+- Instrumented
+- Inferred
+
+Directions should distinguish:
+
+- Incoming
+- Outgoing
+- None
+
+Use enums or constrained string values consistently.
+
+# Static SSR host page
+
+Create a routed page, for example:
+
+```text
+/blazor-internals
+```
+
+The page must:
+
+- Be static SSR.
+- Explain briefly that the left/top area is an Interactive Server component and the telemetry terminal is Interactive WebAssembly.
+- Render the two interactive components as siblings.
+- Use a responsive layout:
+  - Two columns on wide screens.
+  - Stacked layout on narrow screens.
+- Avoid passing live delegates or RenderFragments into either interactive island.
+- Make clear when the WebAssembly observer is still loading/hydrating.
+- Include a concise warning that this is development-only diagnostic instrumentation.
+
+Suggested files:
+
+```text
+Server project/
+└── Components/
+    └── Pages/
+        ├── BlazorInternals.razor
+        └── BlazorInternals.razor.css
+```
+
+Adapt names and paths to repository conventions.
+
+# Interactive Server playground
+
+Create an Interactive Server component dedicated to producing instructive observable behavior.
+
+Use separated files:
+
+```text
+BlazorServerPlayground.razor
+BlazorServerPlayground.razor.cs
+BlazorServerPlayground.razor.css
+```
+
+Provide at least these demonstrations:
+
+## Counter
+
+- Increment button.
+- Reset button.
+- Application annotations for handler start, value change, and completion.
+- Display current count.
+
+## Input event comparison
+
+Provide two inputs:
+
+1. One using the default/change-style binding behavior.
+2. One using `oninput`.
+
+Clearly label them.
+
+Display their current values so the difference in event frequency and rendering is visible.
+
+## Generated list/render-size experiment
+
+- Range or numeric input for row count.
+- Apply button.
+- Render 0 to at least 1,000 lightweight rows.
+- Annotate requested and applied row count.
+- Avoid freezing the browser unnecessarily.
+- Explain that raw incoming frame sizes can be compared as the rendered list grows.
+
+## Server timer
+
+- Start and stop controls.
+- Server-side periodic updates while active.
+- Display tick count and timestamp.
+- Ensure timers are disposed when the component is disposed.
+- Use `InvokeAsync` when updating component state.
+- Annotate timer start, tick, stop, and disposal as appropriate.
+- Avoid excessive telemetry: use a reasonable interval such as one second.
+
+## JavaScript interop
+
+Provide:
+
+- A .NET-to-JavaScript action, such as obtaining a browser value or updating a harmless element.
+- An annotation before and after the JS interop call.
+- Display the returned value.
+- Handle JS disconnection gracefully.
+
+## Asynchronous long-running handler
+
+- Button starts an asynchronous operation lasting a few seconds.
+- UI shows busy state.
+- Prevent duplicate starts.
+- Annotate start, periodic stage if useful, completion, duration, and failure.
+- Use cancellation and dispose it with the component.
+
+## Deliberate synchronous blocking demonstration
+
+This is educational but dangerous.
+
+If included:
+
+- Clearly mark it as potentially disruptive.
+- Keep duration short and bounded, such as one or two seconds.
+- Require an explicit button.
+- Do not use an unbounded loop.
+- Annotate before and after.
+- Explain that it blocks circuit execution.
+
+It may be omitted if it would make the POC unsafe or unreliable, but the async long-running demonstration is required.
+
+## Deliberate exception
+
+- Provide a button that triggers a controlled exception in an event handler.
+- Clearly warn that an unhandled exception may terminate the circuit.
+- Prefer offering both:
+  - A handled exception demonstration.
+  - An unhandled circuit-ending demonstration behind an additional confirmation control.
+- Do not allow accidental activation.
+- Annotate before throwing.
+- Keep the rest of the POC recoverable after page reload.
+
+## Navigation
+
+- Provide a navigation action that stays within the POC.
+- Annotate the navigation request.
+- Do not navigate away to an external site.
+
+## Connection guidance
+
+Include instructions for testing disconnect/reconnect manually, such as:
+
+- Browser DevTools offline mode.
+- Temporarily disabling network.
+- Backgrounding the tab if relevant.
+
+Do not implement brittle code that forcibly tears down Blazor’s internal connection unless it can be done with a supported public API.
+
+# Interactive WebAssembly telemetry terminal
+
+Create the telemetry terminal as an Interactive WebAssembly component.
+
+Use separated files:
+
+```text
+BlazorTelemetryTerminal.razor
+BlazorTelemetryTerminal.razor.cs
+BlazorTelemetryTerminal.razor.css
+BlazorTelemetryTerminal.razor.js
+```
+
+Subcomponents are encouraged:
+
+```text
+TelemetryTabs.razor
+RawFramesTab.razor
+SignalRTab.razor
+CircuitTab.razor
+ServerTab.razor
+AnnotationsTab.razor
+TelemetryEntryRow.razor
+TelemetryDetails.razor
+```
+
+Do not over-componentize tiny markup fragments without benefit.
+
+The WebAssembly component may use normal Blazor state and `StateHasChanged` because its rendering occurs locally and does not use the observed Interactive Server circuit.
+
+## Terminal tabs
+
+Implement these tabs:
+
+1. Raw frames
+2. SignalR
+3. Circuit
+4. Server
+5. Annotations
+
+Each tab must show a count badge.
+
+Tab switching should not contact the server.
+
+Use accessible tabs:
+
+- Buttons with `role="tab"`.
+- A `tablist`.
+- `aria-selected`.
+- `aria-controls`.
+- Tab panels.
+- Keyboard behavior for left/right arrows if practical.
+
+## Raw frames tab
+
+Display:
+
+- Timestamp with milliseconds.
+- Sequence.
+- Direction.
+- Payload type.
+- Byte count.
+- Preview.
+- WebSocket state/event.
+- Expandable structured details.
+
+Use clear visual distinction for incoming versus outgoing traffic.
+
+Do not render unlimited entries.
+
+## SignalR tab
+
+Display transport-level events that can be observed reliably:
+
+- Observer installed.
+- WebSocket constructed.
+- WebSocket opened.
+- WebSocket error.
+- WebSocket close.
+- Reconnect-related observations when known.
+- Transport URL.
+- Close code and reason.
+
+Do not assert that every WebSocket reopen is definitely a successful Blazor circuit reconnection. Label inferred interpretations accurately.
+
+## Circuit tab
+
+Display server-provided `CircuitHandler` events:
+
+- Opened.
+- Connection up.
+- Connection down.
+- Closed.
+
+Show circuit ID and emphasize that connection loss and circuit closure are different events.
+
+## Server tab
+
+Display server instrumentation and diagnostics:
+
+- Event handler operations.
+- Timer events.
+- JS interop operations.
+- Navigation.
+- SSE connection lifecycle.
+- Derived render/response correlations if implemented.
+
+## Annotations tab
+
+Display application-level annotations from the playground:
+
+- Operation name.
+- Started/completed/failed.
+- Duration.
+- Correlation ID.
+- Structured metadata.
+
+# Terminal controls
+
+Provide at least:
+
+- Pause/resume display.
+- Clear local display.
+- Auto-scroll toggle.
+- Text search.
+- Direction filter.
+- Minimum byte-size filter for raw frames.
+- Category filter or per-tab filtering.
+- Maximum retained entries setting within a safe bounded range.
+- Export currently retained entries as JSON.
+- A visible observer status.
+- A visible SSE connection status.
+- A marker showing when observation began.
+- Optional “show startup events” toggle.
+
+Clarify pause semantics:
+
+- Prefer pausing presentation while still buffering a bounded number of events.
+- Do not let pause cause unbounded memory growth.
+- A separate “stop capture” option is optional.
+
+# Event ingestion in WebAssembly
+
+The terminal has two sources.
+
+## Source 1: Browser observer
+
+Use JS interop to:
+
+1. Read buffered startup events.
+2. Subscribe to future browser transport events.
+3. Deliver events to the WebAssembly component in batches.
+4. Avoid one .NET interop call per tiny WebSocket frame where possible.
+5. Flush batches on a short interval or when a bounded batch size is reached.
+6. Unsubscribe and clean up on component disposal.
+
+The observer should continue safely if the terminal component is temporarily absent.
+
+## Source 2: SSE
+
+The WebAssembly component should connect to the server SSE endpoint.
+
+Because browser `EventSource` integration is convenient and robust, it is acceptable for JavaScript to own the EventSource and batch entries into the WebAssembly component.
+
+Alternatively, use HttpClient streaming only if it is reliable in browser WebAssembly under the current .NET 10 environment.
+
+The SSE client must:
+
+- Reconnect naturally.
+- Report connecting/open/error/closed states to the terminal.
+- Avoid duplicate handlers after component rerender.
+- Dispose cleanly.
+- Avoid flooding .NET with individual callbacks; batch where sensible.
+
+# Correlation
+
+Make the timeline educational.
+
+Where possible, correlate related entries using:
+
+- Correlation ID.
+- Operation ID.
+- Timestamp.
+- Circuit ID.
+- Sequence.
+
+For example, clicking Increment should make it possible to see:
+
+```text
+Annotation: Counter handler started
+Raw frame: browser → server
+Server: handler executed
+Raw frame: server → browser
+Annotation: Counter handler completed
+```
+
+Do not fabricate exact causal relationships when only timestamp proximity is known.
+
+If a relationship is inferred, mark it as inferred.
+
+A merged timeline view is optional, but design the shared entry model so it can be added later.
+
+# Feedback-loop prevention
+
+This requirement is critical.
+
+The telemetry terminal must not use Interactive Server.
+
+It must use Interactive WebAssembly so terminal rerenders happen locally.
+
+Server telemetry must use SSE, not the observed Blazor SignalR connection.
+
+Browser capture must observe only the actual Blazor `/_blazor` WebSocket.
+
+Do not capture the SSE stream as a raw Blazor frame.
+
+Do not create a custom SignalR hub for telemetry.
+
+Do not send telemetry rows back through the Interactive Server circuit.
+
+Do not call methods on the playground component from the telemetry component.
+
+The two interactive islands should communicate only indirectly through:
+
+- Browser observation.
+- Server telemetry stream.
+- Shared serializable contracts.
+
+# Ring buffers and performance
+
+All buffers must be bounded.
+
+Suggested defaults:
+
+- Browser startup/raw buffer: 2,000 entries.
+- WebAssembly retained terminal entries: 5,000 entries total.
+- Per-server-subscriber channel: 1,000 entries.
+- Hex preview: first 128 bytes.
+- Text preview: first 512 characters.
+- UI rendering: virtualize long lists where useful.
+
+Use `Virtualize<TItem>` if it works well for the terminal layout.
+
+Avoid:
+
+- Rebuilding all rows for every event.
+- Excessive LINQ allocations in hot paths.
+- Unbounded lists.
+- Blocking locks.
+- Blocking SSE writes across all subscribers.
+- One JS interop call per frame if batching can prevent it.
+
+Dropped events must be counted and shown rather than silently pretending capture is complete.
+
+# Security and privacy
+
+This POC can expose sensitive data.
+
+Implement safeguards:
+
+- Development-only or explicit opt-in enablement.
+- Do not write payload previews to ordinary application logs.
+- Limit previews.
+- Provide an option to hide payload previews.
+- State clearly that event payloads may contain user-entered text or application data.
+- Do not collect cookies, authorization headers, local storage, or unrelated WebSockets.
+- Observe only the Blazor WebSocket endpoint.
+- Do not persist captured telemetry server-side by default.
+- JSON export happens locally in the browser.
+- Avoid unsafe `innerHTML`; render previews as text.
+- Encode all displayed values.
+- Use System.Text.Json.
+
+# Styling and UX
+
+Follow the repository’s visual style where practical.
+
+The terminal should look like a modern diagnostic console, but remain readable.
+
+Requirements:
+
+- Responsive.
+- Dark terminal area is acceptable even if the rest of the page is light.
+- Monospace font for telemetry entries.
+- Clearly distinguish:
+  - Incoming.
+  - Outgoing.
+  - Framework.
+  - Instrumented.
+  - Inferred.
+  - Errors.
+- Use CSS isolation.
+- Avoid hardcoded dimensions that break mobile layouts.
+- Preserve keyboard accessibility.
+- Show empty-state text in every tab.
+- Show loading state while WASM initializes.
+- Show disabled/unavailable state if telemetry is not enabled.
+- Do not rely solely on color to convey meaning.
+
+# Suggested structure
+
+Adapt this to the repository rather than forcing it exactly:
+
+```text
+Server project/
+├── Components/
+│   ├── Pages/
+│   │   ├── BlazorInternals.razor
+│   │   └── BlazorInternals.razor.css
+│   └── BlazorInternals/
+│       ├── BlazorServerPlayground.razor
+│       ├── BlazorServerPlayground.razor.cs
+│       └── BlazorServerPlayground.razor.css
+├── Telemetry/
+│   ├── BlazorTelemetryOptions.cs
+│   ├── BlazorTelemetryPublisher.cs
+│   ├── BlazorTelemetrySubscription.cs
+│   ├── TelemetryCircuitHandler.cs
+│   ├── ApplicationTelemetry.cs
+│   └── TelemetryEndpointExtensions.cs
+└── wwwroot/
+    └── js/
+        └── blazor-transport-observer.js
+
+Shared project or shared source/
+└── Telemetry/
+    ├── TelemetryEntry.cs
+    ├── TelemetryCategory.cs
+    ├── TelemetryDirection.cs
+    └── TelemetryConfidence.cs
+
+Client project/
+└── Components/
+    └── BlazorInternals/
+        ├── BlazorTelemetryTerminal.razor
+        ├── BlazorTelemetryTerminal.razor.cs
+        ├── BlazorTelemetryTerminal.razor.css
+        ├── BlazorTelemetryTerminal.razor.js
+        ├── RawFramesTab.razor
+        ├── SignalRTab.razor
+        ├── CircuitTab.razor
+        ├── ServerTab.razor
+        └── AnnotationsTab.razor
+```
+
+If adding a shared project is excessive for this repository, link or place the serializable contracts where both server and client can reference them cleanly.
+
+Do not duplicate contract types independently in server and client projects.
+
+# JavaScript design requirements
+
+Use modern JavaScript modules where practical.
+
+The early startup observer may need to be a normal script loaded before `blazor.web.js`.
+
+The terminal integration can be an isolated `.razor.js` module.
+
+Requirements:
+
+- No global pollution except one intentional namespace, for example:
+  `window.blazorTelemetryObserver`.
+- Idempotent initialization.
+- Preserve the original WebSocket constructor and static constants:
+  - CONNECTING
+  - OPEN
+  - CLOSING
+  - CLOSED
+- Preserve normal `instanceof WebSocket` behavior as much as practical.
+- Support constructor calls with and without protocols.
+- Never modify payloads.
+- Use `TextEncoder` only for measuring strings.
+- Handle Blob without expensive full reads merely to create a preview.
+- For Blob, report size and type; asynchronously preview only if safe and bounded.
+- Use safe DOM APIs.
+- Clean up listeners.
+- Batch callbacks into .NET.
+- Count dropped events.
+
+Be especially careful that replacing `window.WebSocket` does not break SignalR.
+
+A Proxy-based wrapper may preserve behavior better than subclassing in some browsers. Choose the approach after testing.
+
+# Testing requirements
+
+Add tests where practical.
+
+At minimum, add unit tests for:
+
+- Bounded server broadcaster.
+- Per-subscriber fan-out.
+- Subscriber removal.
+- Dropped-event accounting.
+- Telemetry scope duration and failure behavior.
+- Serialization of telemetry contracts.
+- Category filtering if implemented as testable C# logic.
+
+Do not spend disproportionate effort trying to automate WebSocket interception in unit tests if the repository has no browser test infrastructure.
+
+If browser/component tests already exist, add focused tests for:
+
+- Tab switching.
+- Filtering.
+- Buffer bounds.
+- Export serialization.
+
+# Manual verification checklist
+
+Verify all of the following:
+
+1. Solution builds with no errors.
+2. Existing pages still work.
+3. `/blazor-internals` loads.
+4. Static SSR page renders before either interactive island is ready.
+5. Interactive Server playground becomes interactive.
+6. Interactive WebAssembly terminal becomes interactive independently.
+7. Raw `/_blazor` incoming and outgoing frames appear.
+8. Terminal tab switching does not create new `/_blazor` frames.
+9. Typing in the `oninput` field produces visibly more activity than change-based input.
+10. Counter action produces correlated annotations and transport frames.
+11. Increasing generated rows increases the observed server-to-browser payload size.
+12. Timer produces server-originated updates.
+13. JS interop is annotated.
+14. Async long-running handler remains responsive where expected.
+15. Circuit connection down and circuit closed are displayed as distinct states.
+16. SSE reconnects after a temporary network interruption.
+17. Pause does not cause unbounded memory usage.
+18. Clear only clears local display and does not alter the observed circuit.
+19. JSON export works locally.
+20. Disposing/navigating away removes JS and SSE subscriptions.
+21. Telemetry is unavailable when disabled.
+22. Production mode does not expose the endpoint unless explicitly enabled.
+23. No infinite telemetry-render loop occurs.
+24. Browser console shows no uncaught exceptions.
+25. The terminal can retain thousands of events without becoming unusable.
+
+# Acceptance criteria
+
+The work is complete only when:
+
+- The feature is implemented in the repository.
+- It builds successfully.
+- The static SSR page contains sibling Interactive Server and Interactive WebAssembly components.
+- The WebAssembly terminal displays all five required tabs:
+  - Raw frames.
+  - SignalR.
+  - Circuit.
+  - Server.
+  - Annotations.
+- Raw Blazor WebSocket traffic is captured from page startup.
+- Circuit lifecycle is streamed from the server.
+- Application annotations are streamed from the server.
+- Monitoring does not create a feedback loop through the observed circuit.
+- Buffers are bounded.
+- Telemetry can be disabled.
+- The implementation is documented.
+- Existing functionality is not broken.
+
+# Documentation
+
+Add a README section or dedicated markdown document covering:
+
+- Purpose.
+- Architecture diagram.
+- Why the observer uses Interactive WebAssembly.
+- Why server telemetry uses SSE.
+- Why the page uses static SSR.
+- Why the two interactive components must be siblings.
+- Difference between SignalR connection and Blazor circuit.
+- What each tab shows.
+- Which events are observed, instrumented, framework-provided, or inferred.
+- Known limitations.
+- Security/privacy warning.
+- How to enable telemetry.
+- How to test reconnect behavior.
+- How to inspect the browser’s native WebSocket frames.
+- Version coupling and why a BlazorPack decoder is not included initially.
+
+# Non-goals for the first version
+
+Do not make these blockers:
+
+- Fully decoding BlazorPack.
+- Reconstructing complete render trees.
+- Mapping every binary byte to a DOM operation.
+- Production-grade distributed telemetry.
+- Persisting telemetry.
+- Supporting multiple servers without sticky sessions/backplane.
+- Replacing browser DevTools.
+- Modifying Blazor framework source.
+
+Design extension points for future protocol decoding, but do not create a fragile partial decoder and present it as authoritative.
+
+# Code quality expectations
+
+- Use nullable reference types.
+- Use cancellation tokens correctly.
+- Use async disposal where appropriate.
+- Avoid `async void`.
+- Avoid static mutable state except the deliberate browser observer singleton.
+- Avoid service-locator patterns.
+- Keep UI, transport capture, telemetry publication, and contracts separated.
+- Add comments where behavior is non-obvious, especially around:
+  - Render-mode boundaries.
+  - Early WebSocket interception.
+  - SSE fan-out.
+  - Feedback-loop prevention.
+- Prefer clear names over abbreviations.
+- Do not introduce unnecessary packages.
+- Preserve `.razor`, `.razor.cs`, and `.razor.css` separation for substantial components.
+- Format the solution.
+- Treat warnings seriously.
+- Do not suppress warnings without justification.
+
+# Final response requirements
+
+After implementation, provide:
+
+1. A concise architecture summary.
+2. The files created.
+3. The files modified.
+4. Any outdated implementation removed or superseded.
+5. Build/test commands run.
+6. Build/test results.
+7. Manual verification performed.
+8. Known limitations.
+9. Any assumptions made.
+10. The exact URL for the new POC page.
+
+Do not claim that a behavior was verified if you did not actually verify it.

@@ -1,0 +1,17 @@
+@implements IAsyncDisposable
+@inject ApplicationTelemetry Telemetry
+@inject IJSRuntime JS
+@inject NavigationManager Navigation
+
+<section class="playground" aria-label="Interactive Server playground">
+    <h2>Interactive Server playground</h2><p>This island is the observed circuit.</p>
+    <div class="demo"><h3>Counter</h3><p>Count: <strong>@_count</strong></p><button @onclick="Increment">Increment</button> <button @onclick="Reset">Reset</button></div>
+    <div class="demo"><h3>Input frequency</h3><label>Change binding <input @bind="_changeValue" /></label><label>oninput <input @bind="_inputValue" @bind:event="oninput" /></label><small>Change: @_changeValue · oninput: @_inputValue</small></div>
+    <div class="demo"><h3>Render-size experiment</h3><input type="number" min="0" max="1000" @bind="_requestedRows" /><button @onclick="ApplyRows">Apply rows</button><small>Applied: @_rows</small><div class="rows">@for (var i=0;i<_rows;i++) { <span>row @i</span> }</div></div>
+    <div class="demo"><h3>Server timer</h3><button @onclick="StartTimer" disabled="@(_timer is not null)">Start</button><button @onclick="StopTimer" disabled="@(_timer is null)">Stop</button><small>Tick @_ticks at @_lastTick</small></div>
+    <div class="demo"><h3>JavaScript interop</h3><button @onclick="ReadBrowserTime">Read browser time</button><small>@_browserValue</small></div>
+    <div class="demo"><h3>Async handler</h3><button @onclick="RunLongOperation" disabled="@_busy">@(_busy ? "Working…" : "Run 3-second operation")</button></div>
+    <div class="demo"><h3>Handled error</h3><button @onclick="DemonstrateHandledError">Demonstrate safely</button><small>@_error</small></div>
+    <div class="demo"><h3>Navigation</h3><button @onclick="Navigate">Navigate within POC</button></div>
+    <p class="guidance">To observe connection down versus circuit closed, use browser DevTools Offline mode briefly, then reload to create a new circuit.</p>
+</section>

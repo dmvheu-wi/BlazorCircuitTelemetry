@@ -1,0 +1,11 @@
+@page "/blazor-internals"
+
+<PageTitle>Blazor Circuit Telemetry</PageTitle>
+
+<div class="internals-page">
+    <header><p class="eyebrow">Development-only diagnostic POC</p><h1>Interactive Server circuit telemetry</h1><p>This static SSR host contains two sibling islands: the playground runs on Interactive Server; the terminal runs locally in Interactive WebAssembly and observes it without adding traffic to its circuit.</p></header>
+    <div class="islands">
+        <BlazorServerPlayground @rendermode="InteractiveServer" />
+        <BlazorTelemetryTerminal @rendermode="InteractiveWebAssembly" />
+    </div>
+</div>

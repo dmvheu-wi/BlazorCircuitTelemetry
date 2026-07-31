@@ -1,0 +1,1 @@
+.internals-page { max-width: 1500px; margin: 0 auto; padding: 1.5rem; }.eyebrow { color: #7c3aed; font-weight: 700; text-transform: uppercase; font-size: .75rem; }.islands { display:grid; grid-template-columns:minmax(0, 1fr) minmax(0, 1.4fr); gap:1rem; align-items:start; } @media(max-width:900px){.islands{grid-template-columns:1fr}}

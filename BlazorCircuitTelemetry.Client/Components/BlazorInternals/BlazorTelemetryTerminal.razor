@@ -1,0 +1,16 @@
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+<section class="terminal" aria-label="Interactive WebAssembly telemetry terminal">
+    <header><div><h2>Telemetry terminal</h2><small>Interactive WebAssembly observer · @(_sseStatus)</small></div><span class="status">@_observerStatus</span></header>
+    <div class="controls"><button @onclick="TogglePause">@(_paused ? "Resume" : "Pause")</button><button @onclick="Clear">Clear</button><button @onclick="Export">Export JSON</button><label>Search <input @bind="_search" @bind:event="oninput" /></label><label>Min bytes <input type="number" @bind="_minBytes" /></label></div>
+    <div class="tabs" role="tablist" aria-label="Telemetry categories">
+        @foreach (var category in Categories) { <button role="tab" aria-selected="@(category == _active)" class="@(category == _active ? "active" : "")" @onclick="() => _active = category">@category <span>@Count(category)</span></button> }
+    </div>
+    <div role="tabpanel" class="entries">
+        @if (!Filtered().Any()) { <p>No @_active entries yet. Startup events will appear when the observer finishes loading.</p> }
+        @foreach (var entry in Filtered().TakeLast(500).Reverse()) { <details class="entry @entry.Direction.ToString().ToLowerInvariant()"><summary><time>@entry.Timestamp.LocalDateTime.ToString("HH:mm:ss.fff")</time> <b>@entry.Name</b> @entry.Summary <span>@entry.ByteLength bytes</span></summary><pre>@entry.Preview
+@entry.CircuitId @entry.CorrelationId</pre></details> }
+    </div>
+    <footer>Retained: @_entries.Count / 5000 · Dropped locally: @_dropped · Pause buffers safely; it pauses presentation only.</footer>
+</section>
