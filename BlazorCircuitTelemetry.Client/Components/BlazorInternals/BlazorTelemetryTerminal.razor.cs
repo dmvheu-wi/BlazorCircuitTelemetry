@@ -26,8 +26,11 @@ public partial class BlazorTelemetryTerminal
     private void Add(TelemetryEntry entry) { if (_paused) { if (_pending.Count >= 1000) { _pending.Dequeue(); _dropped++; } _pending.Enqueue(entry); return; } if (_entries.Count >= 5000) { _entries.RemoveAt(0); _dropped++; } _entries.Add(entry); }
     private IEnumerable<TelemetryEntry> Filtered() => _entries.Where(x => x.Category == _active && (x.ByteLength ?? 0) >= _minBytes && ($"{x.Name} {x.Summary} {x.Preview}".Contains(_search, StringComparison.OrdinalIgnoreCase)));
     private int Count(TelemetryCategory category) => _entries.Count(x => x.Category == category);
+    private static string FormatByteCount(int byteLength) => $"{byteLength} {(byteLength == 1 ? "byte" : "bytes")}";
+    private static string VisualKindClass(TelemetryEntry entry) => string.IsNullOrWhiteSpace(entry.VisualKind) ? "" : $"kind-{entry.VisualKind}";
     private void TogglePause() { _paused = !_paused; if (!_paused) while (_pending.TryDequeue(out var entry)) Add(entry); }
     private void Clear() => _entries.Clear();
+    private async Task CopyFrame(string frame) => await JS.InvokeVoidAsync("navigator.clipboard.writeText", frame);
     private async Task Export() { if (_module is not null) await _module.InvokeVoidAsync("exportEntries", _entries); }
     public async ValueTask DisposeAsync() { _self?.Dispose(); if (_module is not null) { await _module.InvokeVoidAsync("dispose"); await _module.DisposeAsync(); } }
     private sealed record ObserverStartupState(bool ObserverAvailable, bool ObserverInstalled);

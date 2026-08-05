@@ -20,6 +20,7 @@ public sealed record TelemetryEntry
     public int? ByteLength { get; init; }
     public string? PayloadType { get; init; }
     public string? Preview { get; init; }
+    public string? VisualKind { get; init; }
     public TelemetryConfidence Confidence { get; init; } = TelemetryConfidence.Instrumented;
     public IReadOnlyDictionary<string, JsonElement>? Metadata { get; init; }
 }

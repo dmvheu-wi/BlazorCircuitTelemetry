@@ -1,4 +1,3 @@
-using BlazorCircuitTelemetry.Client.Pages;
 using BlazorCircuitTelemetry.Components;
 using BlazorCircuitTelemetry.Telemetry;
 using Microsoft.AspNetCore.Components.Server.Circuits;

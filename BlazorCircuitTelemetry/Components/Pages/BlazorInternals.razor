@@ -1,7 +1,13 @@
-@page "/blazor-internals"
+@page "/"
 
 <PageTitle>Blazor Circuit Telemetry</PageTitle>
-
+<svg width="0" height="0" aria-hidden="true" focusable="false">
+    <defs>
+        <clipPath id="telemetry-tab-shape" clipPathUnits="objectBoundingBox">
+            <path d="M .12 0 H .72 C .82 0 .80 .42 .86 .68 C .90 .88 .95 1 1 1 H 0 V .1 A .15 .15 0 0 1 .15 0 Z" />
+        </clipPath>
+    </defs>
+</svg>
 <div class="internals-page">
     <header><p class="eyebrow">Development-only diagnostic POC</p><h1>Interactive Server circuit telemetry</h1><p>This static SSR host contains two sibling islands: the playground runs on Interactive Server; the terminal runs locally in Interactive WebAssembly and observes it without adding traffic to its circuit.</p></header>
     <div class="islands">
