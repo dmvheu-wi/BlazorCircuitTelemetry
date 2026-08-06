@@ -6,7 +6,7 @@ The POC deliberately keeps the observed circuit separate from its display. That 
 
 ![Telemetry terminal showing captured Blazor WebSocket frames](docs/images/telemetry-terminal.png)
 
-*The Interactive WebAssembly terminal lets learners inspect captured frames, decoded messages, circuit events, server events, and POC annotations without modifying the Interactive Server circuit being observed.*
+*The Interactive WebAssembly terminal lets you inspect captured frames, decoded messages, circuit events, server events, and POC annotations without modifying the Interactive Server circuit being observed.*
 
 ## Run it
 
