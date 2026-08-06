@@ -14,4 +14,66 @@
         <BlazorServerPlayground @rendermode="InteractiveServer" />
         <BlazorTelemetryTerminal @rendermode="InteractiveWebAssembly" />
     </div>
+
+    <section id="protocol-reference" class="protocol-reference" aria-labelledby="protocol-reference-title">
+        <details>
+            <summary>
+                <span><span class="eyebrow">Built-in documentation</span><strong id="protocol-reference-title">How the telemetry is decoded</strong></span>
+                <span class="summary-hint">Protocol reference</span>
+            </summary>
+
+            <div class="reference-content">
+                <p class="reference-intro">The decoder combines the documented SignalR MessagePack protocol with Blazor's internal circuit method contracts. Blazor circuit messages are implementation details and may change between .NET releases.</p>
+
+                <div class="reference-grid">
+                    <article>
+                        <h2>Binary envelope</h2>
+                        <pre><code>[VarInt length][MessagePack body]</code></pre>
+                        <dl class="byte-example">
+                            <div><dt><code>02</code></dt><dd>Body length: 2 bytes</dd></div>
+                            <div><dt><code>91</code></dt><dd>MessagePack array with one item</dd></div>
+                            <div><dt><code>06</code></dt><dd>SignalR message type 6: Ping</dd></div>
+                        </dl>
+                    </article>
+
+                    <article>
+                        <h2>Invocation envelope</h2>
+                        <pre><code>[1, Headers, InvocationId, Target, Arguments, StreamIds]</code></pre>
+                        <p>Targets such as <code>JS.RenderBatch</code>, <code>OnRenderCompleted</code>, and <code>JS.EndInvokeDotNet</code> identify Blazor circuit operations inside ordinary SignalR invocations.</p>
+                    </article>
+
+                    <article>
+                        <h2>Render lifecycle</h2>
+                        <ol class="render-flow">
+                            <li><code>JS.RenderBatch</code><span>Server sends a render-tree diff and batch ID.</span></li>
+                            <li><code>OnRenderCompleted</code><span>Browser reports whether that batch was applied.</span></li>
+                            <li><code>JS.EndInvokeDotNet</code><span>A JavaScript-initiated .NET call returns its result.</span></li>
+                        </ol>
+                    </article>
+
+                    <article>
+                        <h2>Terminal classification</h2>
+                        <ul class="classification-list">
+                            <li><strong>RawFrame</strong><span>Original WebSocket payload as copyable hex.</span></li>
+                            <li><strong>SignalR</strong><span>Ping, Invocation, Completion, Close, Ack, and Sequence.</span></li>
+                            <li><strong>Circuit</strong><span>Decoded Blazor targets and correlated render batches.</span></li>
+                            <li><strong>Annotation</strong><span>Events deliberately emitted by this POC.</span></li>
+                        </ul>
+                    </article>
+                </div>
+
+                <div class="official-sources">
+                    <h2>Official Microsoft sources</h2>
+                    <ul>
+                        <li><a href="https://github.com/dotnet/aspnetcore/blob/v10.0.10/src/SignalR/docs/specs/HubProtocol.md" target="_blank" rel="noreferrer">SignalR Hub Protocol specification</a><span>Message types, MessagePack layouts, Ping bytes, and VarInt framing.</span></li>
+                        <li><a href="https://github.com/dotnet/aspnetcore/blob/v10.0.10/src/SignalR/common/Protocols.MessagePack/src/Protocol/MessagePackHubProtocol.cs" target="_blank" rel="noreferrer">SignalR MessagePack implementation</a><span>The production parser and writer.</span></li>
+                        <li><a href="https://github.com/dotnet/aspnetcore/blob/v10.0.10/src/Components/Web.JS/src/Platform/Circuits/CircuitManager.ts" target="_blank" rel="noreferrer">Blazor browser circuit manager</a><span>Handlers for RenderBatch and .NET interop completion.</span></li>
+                        <li><a href="https://github.com/dotnet/aspnetcore/blob/v10.0.10/src/Components/Server/src/Circuits/RemoteRenderer.cs" target="_blank" rel="noreferrer">Blazor server remote renderer</a><span>Sends render batches and tracks acknowledgements.</span></li>
+                        <li><a href="https://github.com/dotnet/aspnetcore/blob/v10.0.10/src/Components/Server/src/ComponentHub.cs" target="_blank" rel="noreferrer">Blazor ComponentHub</a><span>Receives browser circuit calls such as OnRenderCompleted.</span></li>
+                        <li><a href="https://github.com/dotnet/aspnetcore/blob/v10.0.10/src/Components/Web.JS/src/Rendering/RenderBatch/OutOfProcessRenderBatch.ts" target="_blank" rel="noreferrer">RenderBatch binary reader</a><span>Reads the internal render-tree diff payload in the browser.</span></li>
+                    </ul>
+                </div>
+            </div>
+        </details>
+    </section>
 </div>
