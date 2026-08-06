@@ -41,6 +41,29 @@ The terminal combines three deliberately distinct kinds of evidence:
 
 Use the tabs, search, byte filter, pause, clear, and browser-only JSON export to explore the resulting timeline. The built-in “How the telemetry is decoded” reference documents the framing and links to the relevant ASP.NET Core source.
 
+## From browser event to C# handler
+
+The terminal’s raw outgoing frames are not HTTP requests or direct calls to `Increment`. They are SignalR invocations sent through the circuit’s `/_blazor` WebSocket. This is the path exercised when the **Increment** button is clicked:
+
+```mermaid
+flowchart LR
+    DOM["DOM click"] --> Client["blazor.web.js: delegated event listener"]
+    Client --> Message["Event descriptor + event arguments"]
+    Message --> SignalR["SignalR MessagePack invocation over /_blazor"]
+    SignalR --> Hub["ComponentHub on the server"]
+    Hub --> Renderer["Circuit renderer dispatches the event"]
+    Renderer --> Handler["BlazorServerPlayground.Increment()"]
+    Handler --> Batch["Render diff returned as JS.RenderBatch"]
+```
+
+1. `@onclick="Increment"` in [BlazorServerPlayground.razor](BlazorCircuitTelemetry/Components/BlazorInternals/BlazorServerPlayground.razor) tells the renderer to include an event-handler ID in the rendered button. `@bind` uses the same mechanism, choosing `change` by default or `input` for `@bind:event="oninput"`.
+2. `blazor.web.js` installs delegated browser listeners. On a click or input event it builds an event descriptor (including that handler ID) and browser event arguments, then serializes them into the SignalR protocol.
+3. The framework opens the SignalR connection at `/_blazor`. In this POC, [blazor-transport-observer.js](BlazorCircuitTelemetry/wwwroot/js/blazor-transport-observer.js) runs **before** `blazor.web.js`, replaces `WebSocket`, and wraps each matching socket’s `send` method. It copies the frame to the terminal and then calls the original `send`; it does not create, alter, or forward the event itself.
+4. `AddInteractiveServerComponents` and `AddInteractiveServerRenderMode` in [Program.cs](BlazorCircuitTelemetry/Program.cs) enable the framework endpoint and its server-side circuit services. The framework’s [`ComponentHub`](https://github.com/dotnet/aspnetcore/blob/v10.0.10/src/Components/Server/src/ComponentHub.cs) owns `/_blazor`, resolves the connected circuit, and forwards the event to that circuit’s renderer on its dispatcher.
+5. The renderer uses the handler ID to invoke the delegate generated for `Increment`, which runs [the `Increment` method](BlazorCircuitTelemetry/Components/BlazorInternals/BlazorServerPlayground.razor.cs). After the handler completes, Blazor calculates a render diff and sends it back as `JS.RenderBatch`; the browser applies it and acknowledges it with `OnRenderCompleted`.
+
+The application never declares a custom SignalR hub or mapping for button clicks. Those are framework responsibilities; this repository adds only a passive observer around the browser socket and a separate SSE stream for its own educational telemetry. The protocol layout and internal hub targets are implementation details, so treat the decoded labels as version-specific learning aids rather than a stable API.
+
 ## Experiments worth trying
 
 - Compare `change` binding with `oninput` binding to see how event frequency affects traffic and renders.
